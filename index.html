@@ -1,54 +1,78 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Crash Game</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: sans-serif; background: #121212; color: white; text-align: center; margin: 0; padding: 20px; }
-        #game-area { height: 200px; background: #000; border-radius: 15px; display: flex; align-items: center; justify-content: center; position: relative; border: 1px solid #333; }
-        #multiplier { font-size: 40px; font-weight: bold; }
-        .btn { width: 100%; padding: 15px; border-radius: 10px; border: none; font-size: 18px; font-weight: bold; cursor: pointer; margin-top: 15px; background: #0088cc; color: white; }
-        input { width: 100%; padding: 10px; margin-top: 10px; border-radius: 5px; background: #222; color: white; border: 1px solid #444; box-sizing: border-box; }
-        #status { margin-top: 10px; color: #4caf50; }
+        body { font-family: sans-serif; background: #121212; color: white; text-align: center; margin: 0; padding: 20px; overflow: hidden; }
+        #game-area { height: 200px; background: radial-gradient(circle, #1e1e1e 0%, #000 100%); border-radius: 15px; display: flex; align-items: center; justify-content: center; position: relative; border: 2px solid #333; margin-bottom: 20px; }
+        #multiplier { font-size: 48px; font-weight: bold; transition: 0.1s; }
+        .balance-box { font-size: 18px; color: #4caf50; margin-bottom: 20px; background: #1e1e1e; padding: 10px; border-radius: 10px; }
+        input { width: 100%; padding: 15px; margin-bottom: 10px; border-radius: 10px; border: 1px solid #444; background: #222; color: white; text-align: center; font-size: 18px; box-sizing: border-box; }
+        .btn { width: 100%; padding: 18px; border-radius: 12px; border: none; font-size: 20px; font-weight: bold; cursor: pointer; transition: 0.2s; background: #0088cc; color: white; }
+        .win { color: #4caf50; }
+        .lose { color: #ff4444; }
     </style>
 </head>
 <body>
-    <div id="game-area"><div id="multiplier">1.00x</div></div>
-    <div id="status">Баланс: <span id="balance">Загрузка...</span></div>
-    <input type="number" id="betInput" value="100">
-    <button id="actionBtn" class="btn" onclick="handleBtn()">СТАВКА</button>
+
+    <div id="game-area">
+        <div id="multiplier">1.00x</div>
+    </div>
+
+    <div class="balance-box">
+        Баланс: <span id="balance">Загрузка...</span>
+    </div>
+
+    <input type="number" id="betInput" value="100" min="1">
+    <button id="actionBtn" class="btn" onclick="handleBtn()">ПОСТАВИТЬ</button>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
-        
-        // --- ЗАМЕНИ ССЫЛКУ ТУТ ---
+
+        // ТВОЯ АКТУАЛЬНАЯ ССЫЛКА
         const API_URL = "https://xkgqaj-5-140-65-13.ru.tuna.am";
         const userId = tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 12345;
 
-        let balance = 0, isPlaying = false, mult = 1.0, crashAt = 0, interval;
+        let balance = 0;
+        let isPlaying = false;
+        let currentMult = 1.0;
+        let gameInterval;
 
-        async function api(path, method="GET", body=null) {
+        // Универсальная функция запроса
+        async function request(path, method = "GET", body = null) {
             try {
-                const res = await fetch(`${API_URL}${path}`, {
+                const options = {
                     method: method,
-                    headers: { 
-                        "Content-Type": "application/json",
-                        "bypass-tunnel-reminder": "true" 
-                    },
-                    body: body ? JSON.stringify(body) : null
-                });
+                    mode: 'cors',
+                    headers: { 'Accept': 'application/json' }
+                };
+                if (body) {
+                    options.method = "POST";
+                    options.body = JSON.stringify(body);
+                    options.headers['Content-Type'] = 'application/json';
+                }
+
+                const res = await fetch(`${API_URL}${path}`, options);
+                if (!res.ok) throw new Error("Server error");
                 return await res.json();
-            } catch (e) { console.error(e); return null; }
+            } catch (e) {
+                console.error("API Error:", e);
+                return null;
+            }
         }
 
-        async function loadBal() {
-            const data = await api(`/get_balance/${userId}`);
+        async function updateUIBalance() {
+            const data = await request(`/get_balance/${userId}`);
             if (data) {
                 balance = data.balance;
                 document.getElementById('balance').innerText = balance.toFixed(2) + " 💰";
-            } else { document.getElementById('balance').innerText = "Ошибка сети"; }
+            } else {
+                document.getElementById('balance').innerText = "Ошибка сети";
+            }
         }
 
         function handleBtn() {
@@ -56,48 +80,54 @@
         }
 
         async function start() {
-            let bet = parseFloat(document.getElementById('betInput').value);
-            if (bet > balance || bet <= 0) return alert("Баланс!");
-            
-            isPlaying = true; mult = 1.0;
-            crashAt = (Math.random() * 3 + 1.1).toFixed(2);
-            await api("/update_balance", "POST", {user_id: userId, amount: -bet});
-            loadBal();
+            const bet = parseFloat(document.getElementById('betInput').value);
+            if (isNaN(bet) || bet <= 0 || bet > balance) return alert("Недостаточно средств!");
+
+            isPlaying = true;
+            currentMult = 1.0;
+            const crashPoint = (Math.random() * 4 + 1.1).toFixed(2);
+
+            // Списываем ставку
+            await request("/update_balance", "POST", { user_id: userId, amount: -bet });
+            updateUIBalance();
 
             const btn = document.getElementById('actionBtn');
-            btn.innerText = "ЗАБРАТЬ"; btn.style.background = "#ffcc00"; btn.style.color = "#000";
+            btn.innerText = "ЗАБРАТЬ";
+            btn.style.background = "#ffcc00";
+            btn.style.color = "#000";
+            document.getElementById('betInput').disabled = true;
 
-            interval = setInterval(() => {
-                mult += 0.01 * (1 + mult * 0.05);
-                document.getElementById('multiplier').innerText = mult.toFixed(2) + "x";
-                if (mult >= crashAt) crash();
+            gameInterval = setInterval(() => {
+                currentMult += 0.01 + (currentMult * 0.005);
+                const display = document.getElementById('multiplier');
+                display.innerText = currentMult.toFixed(2) + "x";
+                display.className = "";
+
+                if (currentMult >= crashPoint) {
+                    clearInterval(gameInterval);
+                    isPlaying = false;
+                    display.innerText = "CRASH!";
+                    display.className = "lose";
+                    resetUI();
+                }
             }, 100);
         }
 
         async function cashout() {
-            clearInterval(interval);
-            let bet = parseFloat(document.getElementById('betInput').value);
-            await api("/update_balance", "POST", {user_id: userId, amount: bet * mult});
+            clearInterval(gameInterval);
             isPlaying = false;
-            alert("Выигрыш: " + (bet * mult).toFixed(2));
-            reset();
+            const bet = parseFloat(document.getElementById('betInput').value);
+            const win = bet * currentMult;
+
+            await request("/update_balance", "POST", { user_id: userId, amount: win });
+            
+            const display = document.getElementById('multiplier');
+            display.innerText = "ВЫИГРАЛ: " + currentMult.toFixed(2) + "x";
+            display.className = "win";
+            
+            resetUI();
         }
 
-        function crash() {
-            clearInterval(interval);
-            isPlaying = false;
-            document.getElementById('multiplier').innerText = "Crashed!";
-            reset();
-        }
-
-        function reset() {
+        function resetUI() {
             const btn = document.getElementById('actionBtn');
-            btn.innerText = "СТАВКА"; btn.style.background = "#0088cc"; btn.style.color = "white";
-            loadBal();
-        }
-
-        window.onload = loadBal;
-    </script>
-</body>
-</html>
-
+            btn.
