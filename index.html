@@ -3,38 +3,82 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Lucky Crash Game</title>
+    <title>Crash TON</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: white; text-align: center; margin: 0; padding: 20px; }
-        #game-area { height: 180px; background: #1e1e1e; border-radius: 15px; display: flex; align-items: center; justify-content: center; border: 2px solid #333; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        #multiplier { font-size: 50px; font-weight: bold; }
-        .balance-box { font-size: 22px; color: #4caf50; margin-bottom: 20px; font-weight: bold; background: #1e1e1e; padding: 10px; border-radius: 10px; }
-        input { width: 100%; padding: 15px; margin-bottom: 10px; border-radius: 10px; border: 1px solid #444; background: #222; color: white; text-align: center; font-size: 18px; box-sizing: border-box; }
-        .btn { width: 100%; padding: 18px; border-radius: 12px; border: none; font-size: 20px; font-weight: bold; cursor: pointer; background: #0088cc; color: white; transition: 0.2s; }
-        .btn:active { transform: scale(0.98); }
-        .win { color: #4caf50; }
-        .lose { color: #ff4444; }
+        :root { --bg-color: #0f1111; --card-bg: #1a1d20; --accent: #0088cc; --win: #4caf50; --lose: #ff4444; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg-color); color: white; margin: 0; padding: 15px; overflow: hidden; }
+        
+        /* Верхняя панель */
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .balance-chip { background: #1c2a35; padding: 8px 15px; border-radius: 20px; display: flex; align-items: center; border: 1px solid #2a3f4e; }
+        .balance-chip img { width: 18px; margin-right: 8px; }
+        .balance-val { font-weight: bold; color: #fff; font-size: 16px; }
+
+        /* Игровое поле с сеткой */
+        #game-area { 
+            height: 250px; background: #0b141a; border-radius: 15px; position: relative;
+            overflow: hidden; border: 1px solid #222; margin-bottom: 20px;
+            background-image: linear-gradient(#16212a 1px, transparent 1px), linear-gradient(90deg, #16212a 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        #multiplier { 
+            position: absolute; top: 20%; left: 50%; transform: translateX(-50%);
+            font-size: 48px; font-weight: 900; z-index: 10;
+        }
+        .rocket { position: absolute; bottom: 20px; left: 20px; width: 60px; transition: all 0.1s linear; }
+
+        /* Панель управления */
+        .controls { background: var(--card-bg); padding: 20px; border-radius: 20px; box-shadow: 0 -5px 20px rgba(0,0,0,0.5); }
+        .input-group { text-align: left; margin-bottom: 15px; }
+        .input-group label { color: #888; font-size: 12px; margin-left: 5px; }
+        input { 
+            width: 100%; background: #0f1111; border: 1px solid #333; padding: 12px; 
+            border-radius: 10px; color: white; font-size: 18px; margin-top: 5px; box-sizing: border-box;
+        }
+
+        .btn-box { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .btn { 
+            padding: 15px; border-radius: 12px; border: none; font-size: 16px; 
+            font-weight: bold; cursor: pointer; color: white; transition: 0.2s;
+        }
+        .btn-bet { background: #0088cc; }
+        .btn-cash { background: #4caf50; opacity: 0.4; pointer-events: none; }
+        .btn-active { opacity: 1 !important; pointer-events: auto !important; }
+        .btn:disabled { background: #333 !important; opacity: 0.5; }
     </style>
 </head>
 <body>
 
+    <div class="header">
+        <div style="color: #555;">Live: <span style="color: #4caf50;">● 100</span></div>
+        <div class="balance-chip">
+            <img src="https://cryptologos.cc/logos/toncoin-ton-logo.png" alt="ton">
+            <span id="balance" class="balance-val">0.00</span>
+        </div>
+    </div>
+
     <div id="game-area">
         <div id="multiplier">1.00x</div>
+        <div id="rocket" class="rocket">🚀</div>
     </div>
 
-    <div class="balance-box">
-        Баланс: <span id="balance">Загрузка...</span>
+    <div class="controls">
+        <div class="input-group">
+            <label>Ставка</label>
+            <input type="number" id="betInput" value="100">
+        </div>
+        <div class="btn-box">
+            <button id="betBtn" class="btn btn-bet" onclick="start()">ПОСТАВИТЬ</button>
+            <button id="cashBtn" class="btn btn-cash" onclick="cashout()">ЗАБРАТЬ</button>
+        </div>
     </div>
-
-    <input type="number" id="betInput" value="100" min="1">
-    <button id="actionBtn" class="btn" onclick="handleBtn()">ПОСТАВИТЬ</button>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // ТВОЯ НОВАЯ ССЫЛКА CLOUDFLARE
+        // ССЫЛКА (ПЕРЕПРОВЕРЬ ЕЁ!)
         const API_URL = "https://complicated-independence-cluster-reproduction.trycloudflare.com";
         const userId = tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 12345;
 
@@ -43,106 +87,87 @@
         let currentMult = 1.0;
         let gameInterval;
 
-        // Чистая функция запроса для Cloudflare
         async function request(path, method = "GET", body = null) {
             try {
-                const options = {
-                    method: method,
-                    headers: { 'Accept': 'application/json' }
-                };
+                const options = { method, headers: { 'Accept': 'application/json' }};
                 if (body) {
                     options.method = "POST";
                     options.body = JSON.stringify(body);
                     options.headers['Content-Type'] = 'application/json';
                 }
                 const res = await fetch(`${API_URL}${path}`, options);
-                if (!res.ok) throw new Error("API Error");
                 return await res.json();
-            } catch (e) {
-                console.error("Ошибка сети:", e);
-                return null;
-            }
+            } catch (e) { return null; }
         }
 
         async function loadBalance() {
             const data = await request(`/get_balance/${userId}`);
             if (data) {
                 balance = data.balance;
-                document.getElementById('balance').innerText = balance.toFixed(2) + " 💰";
-            } else {
-                document.getElementById('balance').innerText = "Ошибка API";
+                document.getElementById('balance').innerText = balance.toFixed(2);
             }
-        }
-
-        function handleBtn() {
-            if (!isPlaying) start(); else cashout();
         }
 
         async function start() {
-            const betInput = document.getElementById('betInput');
-            const bet = parseFloat(betInput.value);
-            
-            if (isNaN(bet) || bet <= 0 || bet > balance) {
-                return alert("Проверьте ставку!");
-            }
+            const bet = parseFloat(document.getElementById('betInput').value);
+            if (isNaN(bet) || bet <= 0 || bet > balance) return alert("Ошибка ставки!");
 
             isPlaying = true;
             currentMult = 1.0;
-            const crashPoint = (Math.random() * 3 + 1.1).toFixed(2);
+            const crashPoint = (Math.random() * 2.5 + 1.1).toFixed(2);
 
-            // Списываем баланс через сервер
             await request("/update_balance", "POST", { user_id: userId, amount: -bet });
             loadBalance();
 
-            const btn = document.getElementById('actionBtn');
-            btn.innerText = "ЗАБРАТЬ";
-            btn.style.background = "#ffcc00";
-            btn.style.color = "#000";
-            betInput.disabled = true;
+            // Переключаем кнопки
+            document.getElementById('betBtn').disabled = true;
+            document.getElementById('cashBtn').classList.add('btn-active');
+            document.getElementById('betInput').disabled = true;
 
+            const rocket = document.getElementById('rocket');
+            
             gameInterval = setInterval(() => {
-                currentMult += 0.01 + (currentMult * 0.005);
-                const multEl = document.getElementById('multiplier');
-                multEl.innerText = currentMult.toFixed(2) + "x";
-                multEl.style.color = "white";
+                currentMult += 0.01;
+                document.getElementById('multiplier').innerText = currentMult.toFixed(2) + "x";
+                
+                // Двигаем ракету вверх и вправо
+                rocket.style.left = (20 + (currentMult - 1) * 30) + "px";
+                rocket.style.bottom = (20 + (currentMult - 1) * 40) + "px";
 
                 if (currentMult >= crashPoint) {
-                    clearInterval(gameInterval);
-                    isPlaying = false;
-                    multEl.innerText = "CRASH!";
-                    multEl.style.color = "#ff4444";
-                    resetUI();
+                    stopGame("CRASH!");
                 }
             }, 100);
         }
 
         async function cashout() {
-            clearInterval(gameInterval);
-            isPlaying = false;
+            if (!isPlaying) return;
             const bet = parseFloat(document.getElementById('betInput').value);
             const win = bet * currentMult;
-
             await request("/update_balance", "POST", { user_id: userId, amount: win });
-            
-            const multEl = document.getElementById('multiplier');
-            multEl.innerText = "WIN x" + currentMult.toFixed(2);
-            multEl.style.color = "#4caf50";
-            
-            resetUI();
+            stopGame("WIN!");
         }
 
-        function resetUI() {
+        function stopGame(msg) {
+            clearInterval(gameInterval);
+            isPlaying = false;
+            const multEl = document.getElementById('multiplier');
+            multEl.innerText = msg === "WIN!" ? "x" + currentMult.toFixed(2) : "CRASH!";
+            multEl.style.color = msg === "WIN!" ? "#4caf50" : "#ff4444";
+
+            document.getElementById('cashBtn').classList.remove('btn-active');
+            document.getElementById('betBtn').disabled = false;
+            document.getElementById('betInput').disabled = false;
+            
             setTimeout(() => {
-                const btn = document.getElementById('actionBtn');
-                btn.innerText = "ПОСТАВИТЬ";
-                btn.style.background = "#0088cc";
-                btn.style.color = "white";
-                document.getElementById('betInput').disabled = false;
+                multEl.style.color = "white";
+                multEl.innerText = "1.00x";
+                document.getElementById('rocket').style.left = "20px";
+                document.getElementById('rocket').style.bottom = "20px";
                 loadBalance();
             }, 2000);
         }
 
-        // Загрузка при открытии
         window.onload = loadBalance;
     </script>
 </body>
