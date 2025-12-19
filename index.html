@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crash TON</title>
+    <title>Crash TON Live</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --bg-color: #0f1111; --card-bg: #1a1d20; --accent: #0088cc; --win: #4caf50; --lose: #ff4444; }
@@ -24,9 +24,13 @@
         }
         #multiplier { 
             position: absolute; top: 20%; left: 50%; transform: translateX(-50%);
-            font-size: 48px; font-weight: 900; z-index: 10;
+            font-size: 50px; font-weight: 900; z-index: 10; text-shadow: 0 0 20px rgba(0,0,0,0.8);
         }
-        .rocket { position: absolute; bottom: 20px; left: 20px; width: 60px; transition: all 0.1s linear; }
+        #rocket { 
+            position: absolute; bottom: 20px; left: 20px; width: 60px; height: 60px; 
+            font-size: 40px; display: flex; align-items: center; justify-content: center;
+            transition: all 0.1s linear; transform: rotate(45deg);
+        }
 
         /* Панель управления */
         .controls { background: var(--card-bg); padding: 20px; border-radius: 20px; box-shadow: 0 -5px 20px rgba(0,0,0,0.5); }
@@ -34,7 +38,7 @@
         .input-group label { color: #888; font-size: 12px; margin-left: 5px; }
         input { 
             width: 100%; background: #0f1111; border: 1px solid #333; padding: 12px; 
-            border-radius: 10px; color: white; font-size: 18px; margin-top: 5px; box-sizing: border-box;
+            border-radius: 10px; color: white; font-size: 18px; margin-top: 5px; box-sizing: border-box; outline: none;
         }
 
         .btn-box { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -43,15 +47,17 @@
             font-weight: bold; cursor: pointer; color: white; transition: 0.2s;
         }
         .btn-bet { background: #0088cc; }
-        .btn-cash { background: #4caf50; opacity: 0.4; pointer-events: none; }
-        .btn-active { opacity: 1 !important; pointer-events: auto !important; }
-        .btn:disabled { background: #333 !important; opacity: 0.5; }
+        .btn-cash { background: #4caf50; opacity: 0.3; pointer-events: none; }
+        .btn-active { opacity: 1 !important; pointer-events: auto !important; transform: scale(1.02); }
+        .btn:disabled { background: #333 !important; opacity: 0.5; cursor: not-allowed; }
+        
+        .status-text { font-size: 12px; color: #555; margin-bottom: 5px; }
     </style>
 </head>
 <body>
 
     <div class="header">
-        <div style="color: #555;">Live: <span style="color: #4caf50;">● 100</span></div>
+        <div class="status-text">LIVE <span id="online-count" style="color: #4caf50;">● 124</span></div>
         <div class="balance-chip">
             <img src="https://cryptologos.cc/logos/toncoin-ton-logo.png" alt="ton">
             <span id="balance" class="balance-val">0.00</span>
@@ -60,17 +66,17 @@
 
     <div id="game-area">
         <div id="multiplier">1.00x</div>
-        <div id="rocket" class="rocket">🚀</div>
+        <div id="rocket">🚀</div>
     </div>
 
     <div class="controls">
         <div class="input-group">
-            <label>Ставка</label>
+            <label>Ваша ставка</label>
             <input type="number" id="betInput" value="100">
         </div>
         <div class="btn-box">
-            <button id="betBtn" class="btn btn-bet" onclick="start()">ПОСТАВИТЬ</button>
-            <button id="cashBtn" class="btn btn-cash" onclick="cashout()">ЗАБРАТЬ</button>
+            <button id="betBtn" class="btn btn-bet" onclick="placeBet()">ПОСТАВИТЬ</button>
+            <button id="cashBtn" class="btn btn-cash" onclick="cashOut()">ЗАБРАТЬ</button>
         </div>
     </div>
 
@@ -78,16 +84,17 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // ССЫЛКА (ПЕРЕПРОВЕРЬ ЕЁ!)
-        const API_URL = "https://complicated-independence-cluster-reproduction.trycloudflare.com";
+        // ССЫЛКА ИЗ CLOUDFLARE (Убедись, что она верная!)
+        const API_URL = "https://three-alerts-claire-beth.trycloudflare.com";
         const userId = tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 12345;
 
-        let balance = 0;
-        let isPlaying = false;
-        let currentMult = 1.0;
-        let gameInterval;
+        let myBalance = 0;
+        let isBetting = false; // Состояние: мы в игре или нет
+        let hasWon = false;    // Состояние: успели ли забрать деньги
+        let serverMult = 1.0;
 
-        async function request(path, method = "GET", body = null) {
+        // Универсальный запрос
+        async function api(path, method = "GET", body = null) {
             try {
                 const options = { method, headers: { 'Accept': 'application/json' }};
                 if (body) {
@@ -100,75 +107,93 @@
             } catch (e) { return null; }
         }
 
-        async function loadBalance() {
-            const data = await request(`/get_balance/${userId}`);
+        async function updateBalanceUI() {
+            const data = await api(`/get_balance/${userId}`);
             if (data) {
-                balance = data.balance;
-                document.getElementById('balance').innerText = balance.toFixed(2);
+                myBalance = data.balance;
+                document.getElementById('balance').innerText = myBalance.toFixed(2);
             }
         }
 
-        async function start() {
-            const bet = parseFloat(document.getElementById('betInput').value);
-            if (isNaN(bet) || bet <= 0 || bet > balance) return alert("Ошибка ставки!");
+        // Главный цикл синхронизации с сервером
+        async function mainLoop() {
+            const data = await api("/game_status");
+            if (!data) return;
 
-            isPlaying = true;
-            currentMult = 1.0;
-            const crashPoint = (Math.random() * 2.5 + 1.1).toFixed(2);
-
-            await request("/update_balance", "POST", { user_id: userId, amount: -bet });
-            loadBalance();
-
-            // Переключаем кнопки
-            document.getElementById('betBtn').disabled = true;
-            document.getElementById('cashBtn').classList.add('btn-active');
-            document.getElementById('betInput').disabled = true;
-
-            const rocket = document.getElementById('rocket');
-            
-            gameInterval = setInterval(() => {
-                currentMult += 0.01;
-                document.getElementById('multiplier').innerText = currentMult.toFixed(2) + "x";
-                
-                // Двигаем ракету вверх и вправо
-                rocket.style.left = (20 + (currentMult - 1) * 30) + "px";
-                rocket.style.bottom = (20 + (currentMult - 1) * 40) + "px";
-
-                if (currentMult >= crashPoint) {
-                    stopGame("CRASH!");
-                }
-            }, 100);
-        }
-
-        async function cashout() {
-            if (!isPlaying) return;
-            const bet = parseFloat(document.getElementById('betInput').value);
-            const win = bet * currentMult;
-            await request("/update_balance", "POST", { user_id: userId, amount: win });
-            stopGame("WIN!");
-        }
-
-        function stopGame(msg) {
-            clearInterval(gameInterval);
-            isPlaying = false;
             const multEl = document.getElementById('multiplier');
-            multEl.innerText = msg === "WIN!" ? "x" + currentMult.toFixed(2) : "CRASH!";
-            multEl.style.color = msg === "WIN!" ? "#4caf50" : "#ff4444";
+            const rocket = document.getElementById('rocket');
+            const betBtn = document.getElementById('betBtn');
+            const cashBtn = document.getElementById('cashBtn');
 
-            document.getElementById('cashBtn').classList.remove('btn-active');
-            document.getElementById('betBtn').disabled = false;
-            document.getElementById('betInput').disabled = false;
-            
-            setTimeout(() => {
+            serverMult = data.multiplier;
+
+            if (data.is_flying) {
+                // РАКЕТА ЛЕТИТ
+                multEl.innerText = serverMult.toFixed(2) + "x";
                 multEl.style.color = "white";
-                multEl.innerText = "1.00x";
-                document.getElementById('rocket').style.left = "20px";
-                document.getElementById('rocket').style.bottom = "20px";
-                loadBalance();
-            }, 2000);
+                
+                // Двигаем ракету (графика)
+                let move = (serverMult - 1) * 45;
+                rocket.style.left = (20 + move) + "px";
+                rocket.style.bottom = (20 + move * 0.8) + "px";
+
+                // Логика кнопок
+                if (!isBetting) {
+                    betBtn.disabled = true; // Нельзя зайти, когда уже летит
+                } else if (isBetting && !hasWon) {
+                    cashBtn.classList.add('btn-active'); // Можно забрать
+                }
+            } else {
+                // КРАШ (Пауза между раундами)
+                multEl.innerText = "CRASH!";
+                multEl.style.color = "#ff4444";
+                rocket.style.left = "20px";
+                rocket.style.bottom = "20px";
+                
+                // Сброс нашего состояния
+                isBetting = false;
+                hasWon = false;
+                
+                betBtn.disabled = false;
+                cashBtn.classList.remove('btn-active');
+                updateBalanceUI();
+            }
         }
 
-        window.onload = loadBalance;
+        // Ставка
+        async function placeBet() {
+            const amount = parseFloat(document.getElementById('betInput').value);
+            if (amount > myBalance || amount <= 0) return alert("Недостаточно средств!");
+
+            const res = await api("/update_balance", "POST", { user_id: userId, amount: -amount });
+            if (res) {
+                isBetting = true;
+                hasWon = false;
+                document.getElementById('betBtn').disabled = true;
+                updateBalanceUI();
+            }
+        }
+
+        // Забрать деньги
+        async function cashOut() {
+            if (!isBetting || hasWon) return;
+            
+            const amount = parseFloat(document.getElementById('betInput').value);
+            const win = amount * serverMult;
+            
+            const res = await api("/update_balance", "POST", { user_id: userId, amount: win });
+            if (res) {
+                hasWon = true;
+                isBetting = false;
+                document.getElementById('cashBtn').classList.remove('btn-active');
+                alert(`Вы выиграли ${win.toFixed(2)} TON!`);
+                updateBalanceUI();
+            }
+        }
+
+        // Запуск
+        updateBalanceUI();
+        setInterval(mainLoop, 100); // Опрос сервера 10 раз в секунду
     </script>
 </body>
 </html>
