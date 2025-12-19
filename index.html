@@ -70,3 +70,83 @@
         }
 
         // ЗАГРУЗКА БАЛАНСА
+        async function loadBalance() {
+            const data = await request(`/get_balance/${userId}`);
+            if (data) {
+                balance = data.balance;
+                document.getElementById('balance').innerText = balance.toFixed(2) + " 💰";
+            } else {
+                document.getElementById('balance').innerText = "Ошибка сети";
+            }
+        }
+
+        function handleBtn() {
+            if (!isPlaying) start(); else cashout();
+        }
+
+        async function start() {
+            const bet = parseFloat(document.getElementById('betInput').value);
+            if (isNaN(bet) || bet <= 0 || bet > balance) {
+                return alert("Недостаточно средств или неверная ставка!");
+            }
+
+            isPlaying = true;
+            currentMult = 1.0;
+            const crashPoint = (Math.random() * 3 + 1.2).toFixed(2);
+
+            // Списываем баланс
+            await request("/update_balance", "POST", { user_id: userId, amount: -bet });
+            loadBalance();
+
+            const btn = document.getElementById('actionBtn');
+            btn.innerText = "ЗАБРАТЬ";
+            btn.style.background = "#ffcc00";
+            btn.style.color = "#000";
+            document.getElementById('betInput').disabled = true;
+
+            gameInterval = setInterval(() => {
+                currentMult += 0.01 + (currentMult * 0.003); // Ускорение со временем
+                document.getElementById('multiplier').innerText = currentMult.toFixed(2) + "x";
+                
+                if (currentMult >= crashPoint) {
+                    clearInterval(gameInterval);
+                    isPlaying = false;
+                    document.getElementById('multiplier').innerText = "CRASH!";
+                    document.getElementById('multiplier').classList.add('lose');
+                    resetUI();
+                }
+            }, 100);
+        }
+
+        async function cashout() {
+            clearInterval(gameInterval);
+            isPlaying = false;
+            const bet = parseFloat(document.getElementById('betInput').value);
+            const win = bet * currentMult;
+
+            await request("/update_balance", "POST", { user_id: userId, amount: win });
+            
+            document.getElementById('multiplier').innerText = "X" + currentMult.toFixed(2);
+            document.getElementById('multiplier').classList.add('win');
+            
+            alert("Выигрыш: " + win.toFixed(2) + " 💰");
+            resetUI();
+        }
+
+        function resetUI() {
+            setTimeout(() => {
+                const btn = document.getElementById('actionBtn');
+                btn.innerText = "ПОСТАВИТЬ";
+                btn.style.background = "#0088cc";
+                btn.style.color = "white";
+                document.getElementById('betInput').disabled = false;
+                document.getElementById('multiplier').classList.remove('win', 'lose');
+                loadBalance();
+            }, 1500);
+        }
+
+        // Запуск при старте
+        window.onload = loadBalance;
+    </script>
+</body>
+</html>
